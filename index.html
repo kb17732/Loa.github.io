@@ -117,6 +117,17 @@
 <pre id="json"></pre>
 <script>
 // Replace access token!
+val client = OkHttpClient.Builder().addInterceptor { chain ->
+  val response = chain.proceed(chain.request())
+
+  if (response.code() == 401) {
+    // Code that handles unauthorized Mapbox token
+  }
+
+  response
+}.build()
+
+HttpRequestImpl.setOkHttpClient(client)
 mapboxgl.accessToken = 'pk.eyJ1IjoidWJjbWljcm9tZXQiLCJhIjoiY2xmMnJzYzlnMGFsYTNxcW1kYWhubjBiaSJ9.rhIOVatxQoS4M__qIFv6Pg';
 
 const URL = 'https://raw.githubusercontent.com/CANFLUX/FieldSiteMaps/main/footprints/';
