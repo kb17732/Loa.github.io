@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>UBC Micromet Field Sites</title>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+<link href="https://api.mapbox.com/mapbox-gl-js/v2.6.1/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v2.6.1/mapbox-gl.js"></script>
+<!-- Import Turf Module - Needed to calculate bounding boxes -->
+<script src='https://api.mapbox.com/mapbox.js/plugins/turf/v2.0.2/turf.min.js'></script>
+
+<style>
+	body { margin: 0; padding: 0;}
+	#map { position: absolute; top: 0; bottom: 0; width: 100%;}
+	#map canvas {cursor: crosshair;}
+  
+    .action_menu {
+        text-align: center;
+        background: #fff;
+        position: absolute;
+        z-index: 1;
+        bottom: 2%;
+        right: 10px;
+        border: #3887be;
+        border-radius: 3px;
+        display: flex;
+        max-height: 10%;
+        min-width: 75px;
+        max-width: 100%;
+        border: 1px solid rgba(0, 0, 0, 0.4);
+        font-family: 'Open Sans', sans-serif; 
+        }
+
+    .btn {
+        font: bold 12px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif;
+        background-color: #3386c0;
+        color: #fff;
+        position: relative;
+        z-index: 1;
+        border-width: 1px;
+        display: block;
+        cursor: pointer;
+        padding: 8px;
+        border-color: black;
+        width: 100%;
+        /* min-width: 5%; */
+    }
+    .btn:hover {
+        background-color: #4ea0da;
+    }
+    .btn:first-child{
+        margin-left: 0;
+    }    
+    
+    .mapboxgl-popup {
+        padding: 1%;
+        max-width: 50%;
+        min-width: 15%;
+        font-size:2em;
+        line-height:1.25em;
+        }
+
+    #layer_menu {
+        background: #fff;
+        position: absolute;
+        z-index: 1;
+        top: 10px;
+        left: 10px;
+        border-radius: 3px;
+        width: 5%;
+        min-width: 75px;
+        border: 1px solid rgba(0, 0, 0, 0.4);
+        font-family: 'Open Sans', sans-serif;
+        }
+              
+    nav a {
+        font-size: 13px;
+        color: #404040;
+        display: block;
+        margin: 0;
+        padding: 0;
+        padding: 8px;
+        text-decoration: none;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+        text-align: center;
+        }
+        
+    nav a:last-child {
+        border: none;
+        }
+        
+    nav a:hover {
+        background-color: #f8f8f8;
+        color: #404040;
+        }
+        
+    nav a.active {
+        background-color: #3887be;
+        color: #ffffff;
+        }
+        
+    nav a.active:hover {
+        background: #3074a4;
+        }
+</style>
+</head>
+
+<body>
+<nav id="layer_menu"></nav>
+<div id="map"></div>
+<div class="action_menu"> 
+    <button id="readme" class="btn">View Github</button>
+</div>
+
+
+
+<pre id="json"></pre>
+<script>
+// Replace access token!
+mapboxgl.accessToken = 'pk.eyJ1IjoidWJjbWljcm9tZXQiLCJhIjoiY2xmMnJzYzlnMGFsYTNxcW1kYWhubjBiaSJ9.rhIOVatxQoS4M__qIFv6Pg';
+
+const URL = 'https://raw.githubusercontent.com/ubc-micromet/FieldSiteMaps/main/footprints/';
+const Site_Points = 'EC_Sites.geojson';
+
+    
+//  Custom mapStyle lest us use ESRI raster tiles
+const mapStyle = {
+    version: 8,
+    sources: {
+    worldImagery: {
+        type: "raster",
+        tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        tileSize: 256
+        }
+    },
+    layers: [{
+        id: "worldImagery",
+        type: "raster",
+        source: "worldImagery",
+        minzoom: 0,
+        maxzoom: 22
+        }
+    ]
+};
+
+//  Create the map - zoom and center are "arbitrary"
+const map = new mapboxgl.Map({
+            container: 'map',
+            zoom: 10,
+            center: [-122.998, 49.135],
+            style: mapStyle,
+            });
+
+            
+//  Locate the user
+var geolocate = new mapboxgl.GeolocateControl({
+    positionOptions: {
+    enableHighAccuracy: true
+    },
+    trackUserLocation: true,
+    showUserHeading: true},);
+
+map.addControl(geolocate);
+map.addControl(new mapboxgl.NavigationControl());  
+map.addControl(new mapboxgl.ScaleControl({position: 'bottom-right'}));
+
+// Define Sites
+const SiteIds = ['BB','BB2','DSM','RBM'];
+var Sites = [];
+for( var i = 0; i < SiteIds.length; i++ ){
+        Sites.push(SiteIds[i]+'_FP_Clim_Contours.geojson');
+    }
+
+SiteIds.push('Site_Points')
+Sites.push(Site_Points)
+
+document.getElementById('readme').addEventListener('click', () => {
+        window.open('https://github.com/ubc-micromet/FieldSiteMaps');
+    });
+
+// get geojson layer from github
+async function getGeoJson(layer) {
+        const data = await fetch(layer);
+        const geojson = await data.json();
+        return geojson;
+    };
+
+    
+// Calculate an average
+function average(elmt){
+    var sum = 0;
+    for( var i = 0; i < elmt.length; i++ ){
+        sum += parseFloat( elmt[i]);
+    }
+    var avg = sum/elmt.length
+    return avg;
+    ;
+}
+
+async function mapData(){
+
+    const site_data = []
+        
+    //  On load - add geojson
+    map.on('load', async function() {
+        var set_vis = 'visible'
+
+        // Add each layer as an invisible layer
+        for (var i = 0; i < SiteIds.length; i++) {
+            var layer = await getGeoJson(URL+Sites[i]);
+            site_data.push(layer);
+         
+            map.addSource(SiteIds[i], {
+            type: 'geojson',
+            data: site_data[i]
+            });
+            
+            if (SiteIds[i] != 'Site_Points'){
+                map.addLayer({'id': SiteIds[i],
+                    'type': 'fill',
+                    'source': SiteIds[i],
+                    'layout': {
+                        'visibility': 'none'
+                    },
+                    'paint': {
+                        'fill-color': '#e3430e',
+                        'fill-opacity': 0.25
+                        }
+                    });
+                // Outline
+                map.addLayer({'id': SiteIds[i]+'_contours',
+                    'type': 'line',
+                    'source': SiteIds[i],
+                    'layout': {
+                        'visibility': 'visible'
+                    },
+                    'paint': {
+                        'line-color': '#000',
+                        'line-width': 3
+                        }
+                    });
+            }
+
+            else{
+                map.addLayer({'id': SiteIds[i],
+                    'type': 'circle',
+                    'source': SiteIds[i],
+                    'layout': {
+                        'visibility': 'visible'
+                    },
+                    'paint': {
+                        'circle-radius': 10,
+                        'circle-color': '#3a34eb',
+                        "circle-stroke-width": 1,
+                        "circle-stroke-color": 'black'
+                        },
+                    });
+            };
+
+            };
+
+    });
+
+    
+    map.on('idle', () => {
+        // Set up the corresponding toggle button for each layer.
+        for (const id of SiteIds) {
+        // Skip layers that already have a button set up.
+            if (document.getElementById(id) || id == 'Site_Points') {
+            continue;
+            }
+                // Create a link.
+                const link = document.createElement('a');
+                link.className = 'active';
+                link.id = id;
+                link.href = '#';
+                link.textContent = id;
+                // Show or hide layer when the toggle is clicked.
+                link.onclick = function (e) {
+
+                    const clickedLayer = this.textContent;
+                    e.preventDefault();
+                    e.stopPropagation();    
+                    const visibility = map.getLayoutProperty(
+                        clickedLayer,
+                        'visibility'
+                        );
+                
+                    // Toggle layer visibility by changing the layout object's visibility property.
+                    if (visibility === 'visible') {
+                        map.setLayoutProperty(clickedLayer, 'visibility', 'none');
+                        if (clickedLayer === 'BBS'){
+                            map.setLayoutProperty(clickedLayer+'_outline', 'visibility', 'none')
+                        };
+                        this.className = '';
+                        } 
+                    else {
+                    idx = SiteIds.indexOf(clickedLayer)
+
+                    let bbox = turf.extent(site_data[idx]);
+
+                    // fit zom to the bounding box of whichever layers are loaded
+                    function fit() {
+                        map.fitBounds(bbox, {maxZoom: 18});
+                        };
+        
+                    fit();
+                    this.className = 'active';
+                    map.setLayoutProperty(clickedLayer,'visibility','visible');
+                    if (clickedLayer === 'BBS'){
+                        map.setLayoutProperty(clickedLayer+'_outline', 'visibility', 'visible')
+                    };
+                    }
+                };
+
+            const layers = document.getElementById('layer_menu');
+            layers.appendChild(link);
+            };
+        }  
+    );
+
+    map.on('click', SiteIds, (e) => {
+        // Copy coordinates array.
+        var coordinates = [0,0]
+        if (e.features[0].geometry.coordinates[0].constructor === Array){ 
+            coordinates = e.features[0].geometry.coordinates[0].slice();
+        }
+        else{
+            coordinates = e.features[0].geometry.coordinates.slice();
+        };
+        // If polygon or line - calculate mean center of vertices
+        if(coordinates[0].constructor === Array){
+            output = coordinates[0].map((_, colIndex) => coordinates.map(row => row[colIndex]));
+            coordinates = [average(output[0]),average(output[1])]
+        };
+        const info = e.features[0].properties.info;
+        var description = '';
+        if (info.substring(0,4) != 'http'){description = info;}
+        else{description = '<p><a href='+info+' target="_blank">Site info</a></p>'};
+        
+        // Ensure that if the map is zoomed out such that multiple
+        // copies of the feature are visible, the popup appears
+        // over the copy being pointed to.
+        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+        coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+        }
+        
+        new mapboxgl.Popup()
+            .setLngLat(coordinates)
+            .setHTML(description)
+            .addTo(map);
+        });
+
+            
+};
+
+// Call mapData() to initalize the map
+mapData();
+
+</script>
+ 
+</body>
+</html>
